@@ -1,0 +1,19 @@
+#' Bears bears dataframe
+#'
+#' A "survey" of bears in Berlin
+#' Report ...
+#'
+#' @format ## `berlinbears`
+#' A data frame with 500 rows and 22 columns describing bears and their preferences:
+#' \describe{
+#'   \item{species}{name of species}
+#'   \item{genus}{genus that the species belongs to}
+#'   \item{gender}{gender ofthe bear}
+#'   \item{age}{age of the bear}
+#'   \item{will_eat.SQ001, will_eat.SQ002, will_eat.SQ003, will_eat.SQ004, will_eat.SQ005 }{survey questions on foods the bear will eat}
+#'   \item{p_likespine, p_likeshoney, p_eatstrash, p_swims, p_hibernates,p_likes_zoo}{example of likert questions}
+#'   ...
+#' }
+"berlinbears"
+
+

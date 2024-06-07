@@ -11,6 +11,7 @@
 #' and a note is added at the bottom of the table.
 #'
 #' @inheritParams multi_summary
+#' @param column_order reorder columns of final table with an argument to pass to `dplyr::relocate()`
 #'
 #' @return  A gt table summarizing percentages and counts for each response
 #'   option in the specified multiple-choice question. If grouping is provided,
@@ -43,7 +44,8 @@ matrix_table <- function(dataset,
                          group_by = NULL,
                          subgroups_to_exclude = NULL,
                          weights = NULL,
-                         na.rm = FALSE){
+                         na.rm = FALSE,
+                         column_order = NULL){
 
   #save user input for name of table
   question_name <-  deparse(substitute(question))
@@ -73,10 +75,12 @@ matrix_table <- function(dataset,
   #Wide format for GT
   data.table <- data.table %>%
     tidyr::pivot_wider(names_from=c(response),
-                       values_from=c(`Percent (count)`))
+                       values_from=c(`Percent (count)`)) %>%
+    #0.2.0 add option to specify column order
+    dplyr::relocate({{column_order}})
 
   if(is.null(group_by)){
-    #No groupipng
+    #without grouping
     matrix.table <- data.table %>%
       gt::gt(rowname_col = 'question') %>%
       gt::tab_style(
@@ -146,7 +150,7 @@ matrix_mean <- function(dataset,
 
   try(group_by <- rlang::ensym(group_by), silent = TRUE) # try function is here since if is null, then it will fail
   try(weights <- rlang::ensym(weights), silent = TRUE) # try function is here since if is null, then it will fail
-  se <- sd <- response <- freq <- NULL #created useing NSE, necessary to avoid visible binding note
+  se <- sd <- response <- freq <- unweighted_n <- NULL #created useing NSE, necessary to avoid visible binding note
 
   data.table <- multi_summary(dataset = dataset,
                                     question =  all_of(question),
@@ -156,23 +160,40 @@ matrix_mean <- function(dataset,
                                     na.rm = na.rm) %>%
     dplyr::select(-freq)
 
+
   data.table$response <-  as.numeric(data.table$response)
   data.table$n <-  as.numeric(data.table$n)
   if(!is.null(weights)){
     data.table$n <- round(data.table$n,0)
-  }
+      }
 
 
 if(is.null(group_by)){
-  #no subgroups
+  #Plot without subgroups
+
+  #Get unweighted number of observations for each group
+  # when data is weighted the n changes because of tidyr::uncount(n), so
+  # n must be added seperatly to calculate standard errors
+  #this is how n is calculated regardless of whether weights are specified
+  data.unweighted_n <-multi_summary(dataset = dataset,
+                                    question =  all_of(question),
+                                    group_by =   if(!is.null(group_by)){group_by},
+                                    subgroups_to_exclude =  subgroups_to_exclude,
+                                    na.rm = na.rm) %>%
+    dplyr::select(question, n) %>%
+    dplyr::group_by(question) %>%
+    dplyr::summarise(unweighted_n = sum(n))
+
+  #Calculate mean and standard error
   data.table <- data.table %>%
     dplyr::group_by(question) %>%
     tidyr::uncount(n) %>%
     dplyr::summarise(
       mean = mean(response),
-      sd = stats::sd(response),
-      n = n(),
-      se = sd / sqrt(n()))
+      sd = stats::sd(response)) %>%
+    # add (unweighted) number of observations to summary
+    dplyr::left_join(data.unweighted_n, by = 'question') %>%
+    dplyr::mutate(se = sd / sqrt(unweighted_n))
 
   graph.likert_mean <- ggplot(data.table, aes(x= factor(question), y=mean)) +
     ggplot2::geom_point(size = 2) +
@@ -188,14 +209,31 @@ if(is.null(group_by)){
 
   } else{
 
+  #Plot when groups are specified
+
+    #Get unweighted number of observations for each group
+    # when data is weighted the n changes because of tidyr::uncount(n), so
+    # n must be added seperatly to calculate standard errors
+    #this is how n is calculated regardless of whether weights are specified
+    data.unweighted_n <-multi_summary(dataset = dataset,
+                                      question =  all_of(question),
+                                      group_by =   if(!is.null(group_by)){group_by},
+                                      subgroups_to_exclude =  subgroups_to_exclude,
+                                      na.rm = na.rm) %>%
+      dplyr::select(question, group_by, n) %>%
+      dplyr::group_by(question, group_by) %>%
+      dplyr::summarise(unweighted_n = sum(n))
+
+  #Calculate mean and standard error
   data.table <- data.table %>%
     dplyr::group_by(question, group_by) %>%
     tidyr::uncount(n) %>%
     dplyr::summarise(
       mean = mean(response),
-      sd = sd(response),
-      n = n(),
-      se = sd / sqrt(n()))
+      sd = sd(response)) %>%
+    # add (unweighted) number of observations to summary
+    dplyr::left_join(data.unweighted_n, by = c('question', 'group_by')) %>%
+    dplyr::mutate(se = sd / sqrt(unweighted_n))
 
   graph.likert_mean <- ggplot(data.table, aes(x= factor(question), y=mean, color = group_by)) +
     ggplot2::geom_point(size = 2, position = ggplot2::position_dodge(width=0.5)) +
@@ -233,8 +271,12 @@ return(graph.likert_mean)
 #'
 #'
 #' @inheritParams multi_summary
+#' @param colors Optional vector specifying colors for each response category.
+#' @param response_order An optional vector specifying the order of factor levels for the response categories.
+#' This parameter is particularly useful for ensuring that the response categories are presented in a specific, meaningful order when plotting.
+#' For instance, in surveys or questionnaires where responses range from strongly disagree to strongly agree, setting response_order allows the categories to be
+#' displayed in this logical sequence rather than an alphabetical or random order.
 
-#'
 #' @return A ggplot2 object representing a grouped bar chart displaying the frequency distribution of responses
 #' for the specified categorical variable. The chart supports grouping, weighting, and exclusion of subgroups.
 #' @examples
@@ -259,15 +301,17 @@ return(graph.likert_mean)
 
 matrix_freq <- function(dataset,
                              question,
+                             response_order = NULL,
                              group_by = NULL,
                              subgroups_to_exclude = NULL,
                              weights = NULL,
-                             na.rm = FALSE){
+                             na.rm = FALSE,
+                             colors = NULL){
 
 
   try(group_by <- rlang::ensym(group_by), silent = TRUE) # try function is here since if is null, then it will fail
   try(weights <- rlang::ensym(weights), silent = TRUE) # try function is here since if is null, then it will fail
-  response <- freq <- NULL #created useing NSE, necessary to avoid visible binding note
+  response <- freq <- freq.label <- NULL #created using NSE, necessary to avoid visible binding note
   data.table <- multi_summary(dataset = dataset,
                                     question =  all_of(question),
                                     group_by =   if(!is.null(group_by)){group_by},
@@ -275,22 +319,49 @@ matrix_freq <- function(dataset,
                                     weights =   if(!is.null(weights)){weights},
                                     na.rm = na.rm)
 
+  #Create a new column for the labels (0.2.0)
+  #NA for labels that are  < 10%
+  data.table$freq.label <- ifelse(data.table$freq > .1,
+                                  yes = data.table$freq, no = NA_integer_)
 
+
+  if(!is.null(response_order)){
+    data.table <- data.table %>% dplyr::mutate(response = factor(response,
+                                                                     levels = response_order,
+                                                                     ordered = TRUE))
+  }
+
+  #Build plot
  graph.freq <-  ggplot2::ggplot(data.table, aes(x= question, y = freq,
                                   fill = response,
-                                  label = scales::percent(freq, accuracy = .001))) +
-    ggplot2::geom_bar(stat = 'identity' ) +
-    ggplot2::geom_text(position = ggplot2::position_fill(vjust = .5),
-                       check_overlap = TRUE,
-                       size = 3.3) +
+                                  label = scales::percent(freq, accuracy = .1))) +
+    ggplot2::geom_bar(stat = 'identity') +
     ggplot2::coord_flip() +
+    ggplot2::scale_y_continuous(labels = scales::percent) +
+
+   ##Text
+   #0.2.0 add new labeling
+   ggplot2::geom_label(
+     aes(label = scales::percent(freq.label, decimal.mark = '.', suffix = "", label.padding = .05, accuracy = .1),
+          group = response), colour = "black", size = 2.8, fill = 'white',
+     label.padding=ggplot2::unit(.1, "lines"), position = ggplot2::position_stack(.5), na.rm = TRUE) +
+
+    # ggplot2::geom_text(position = ggplot2::position_fill(vjust = .5),
+    #                    check_overlap = TRUE,
+    #                    size = 3.3) +
     ggplot2::labs(subtitle = "",
                   title = "",
                   y = '',
                   x = "",
-                  fill = "")+
+                  fill = "") +
+   # Theme & color
    ggplot2::theme_minimal() +
-   ggplot2::guides(fill = ggplot2::guide_legend(reverse=T))
+   ggplot2::guides(fill = ggplot2::guide_legend(reverse=TRUE,
+                                                nrow = 1,
+                                                position = 'bottom' )) +
+   #ggplot2::theme(legend.position = 'bottom') +
+   if(is.null(colors)){ggplot2::scale_fill_brewer(palette = "RdYlBu", type = "qual")}
+ else {ggplot2::scale_fill_manual(values = colors)}
 
 
  if(!is.null(group_by)){
@@ -298,13 +369,7 @@ matrix_freq <- function(dataset,
      ggplot2::facet_wrap(~group_by, scales = "fixed", ncol = 2)
 
  }
-
-
-
-
  return(graph.freq)
-
-
 }
 
 

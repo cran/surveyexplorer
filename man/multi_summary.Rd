@@ -10,7 +10,7 @@ multi_summary(
   group_by = NULL,
   subgroups_to_exclude = NULL,
   weights = NULL,
-  na.rm
+  na.rm = FALSE
 )
 }
 \arguments{
